@@ -1,0 +1,24 @@
+issuer: https://paperlessmcp-oauth.mchristoffers.dev/dex
+
+storage:
+  type: memory
+
+web:
+  http: 0.0.0.0:5556
+
+oauth2:
+  skipApprovalScreen: true
+
+staticClients:
+  - id: claude-mcp
+    secretEnv: DEX_CLIENT_SECRET
+    redirectURIs:
+      - https://claude.ai/api/mcp/auth_callback
+    name: "Claude PaperlessMCP"
+
+enablePasswordDB: true
+staticPasswords:
+  - email: "moritz"
+    hash: "$2b$12$***REMOVED-SECRET***"
+    username: "moritz"
+    userID: "moritz"

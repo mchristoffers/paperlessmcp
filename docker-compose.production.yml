@@ -82,6 +82,85 @@ services:
     cap_drop:
       - ALL
 
+  # Oeffentlicher Zugriff fuer claude.ai (Web-Connector kann nicht ins
+  # Tailnet). Kein Cloudflare Access, kein Google-Login: Dex ist ein
+  # premade, 11k*-OIDC-Server mit rein statischer Konfiguration — genau ein
+  # Client (claude-mcp), genau ein lokaler Nutzer (moritz). Speicher: memory
+  # (kein Datenbestand, nur kurzlebige Auth-Codes/Sessions).
+  dex:
+    build:
+      context: ./dex
+      pull: true
+    restart: unless-stopped
+    environment:
+      DEX_CLIENT_SECRET: ${DEX_CLIENT_SECRET:?DEX_CLIENT_SECRET is required}
+    expose:
+      - "5556"
+    networks:
+      - paperless_internal
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # Premade Bearer-Token-Gate (14.8k*) vor dem unveraenderten paperlessmcp:
+  # prueft den von claude.ai gesendeten JWT gegen Dex' JWKS
+  # (skip-jwt-bearer-tokens-Modus, kein Cookie/Redirect-Flow noetig) und
+  # reicht dann durch.
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:latest
+    restart: unless-stopped
+    depends_on:
+      paperlessmcp:
+        condition: service_started
+      dex:
+        condition: service_started
+    environment:
+      OAUTH2_PROXY_PROVIDER: oidc
+      OAUTH2_PROXY_OIDC_ISSUER_URL: https://paperlessmcp-oauth.mchristoffers.dev/dex
+      OAUTH2_PROXY_CLIENT_ID: claude-mcp
+      OAUTH2_PROXY_CLIENT_SECRET: ${DEX_CLIENT_SECRET:?DEX_CLIENT_SECRET is required}
+      OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_PROXY_COOKIE_SECRET:?OAUTH2_PROXY_COOKIE_SECRET is required}
+      OAUTH2_PROXY_REDIRECT_URL: https://paperlessmcp-oauth.mchristoffers.dev/oauth2/callback
+      OAUTH2_PROXY_UPSTREAMS: http://paperlessmcp:5000
+      OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
+      OAUTH2_PROXY_SKIP_JWT_BEARER_TOKENS: "true"
+      OAUTH2_PROXY_EXTRA_JWT_ISSUERS: https://paperlessmcp-oauth.mchristoffers.dev/dex=claude-mcp
+      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
+      OAUTH2_PROXY_INSECURE_OIDC_ALLOW_UNVERIFIED_EMAIL: "true"
+    expose:
+      - "4180"
+    networks:
+      - paperless_internal
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # Plain-HTTP-Router hinter dem Homelab-Cloudflare-Tunnel (Tunnel terminiert
+  # TLS, siehe coolify-home/nextcloud/appflowy/mealie). Routet /dex/* zu Dex,
+  # /mcp* zum Bearer-Gate, und serviert die MCP-Protected-Resource-Metadata
+  # als statisches JSON (keine eigene Logik, nur Caddy-Config).
+  paperlessmcp-oauth-router:
+    build:
+      context: ./router
+      pull: true
+    restart: unless-stopped
+    depends_on:
+      dex:
+        condition: service_started
+      oauth2-proxy:
+        condition: service_started
+    ports:
+      - "8084:8080"
+    networks:
+      - paperless_internal
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
 volumes:
   caddy_data:
   caddy_config:
