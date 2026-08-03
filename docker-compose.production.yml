@@ -4,8 +4,17 @@ name: paperlessmcp
 # Tunnel oder Funnel. `svc:paperlessmcp` leitet TCP/443 ausschließlich im
 # Tailnet auf Caddy weiter; Caddy terminiert die eigene Domain mit Let's
 # Encrypt. PaperlessMCP selbst haengt direkt im internen Docker-Netz der
-# bestehenden paperless-App und spricht Paperless ueber deren Servicenamen an
-# (kein Umweg ueber Caddy/Tailscale fuer den API-Traffic).
+# bestehenden paperless-App.
+#
+# PAPERLESS_BASE_URL zeigt bewusst auf den echten externen Hostnamen
+# (https://paperless.mchristoffers.dev), nicht auf http://paperless:8000: alle
+# Download-/Vorschau-/Thumbnail-URLs, die PaperlessMCP zurueckgibt, werden
+# clientseitig aus genau dieser Base-URL gebaut (siehe DocumentTools.cs,
+# client.BaseUrl) und muessen deshalb direkt im Browser/Tailnet anklickbar
+# sein. `paperless-alias` macht den Hostnamen intern aufloesbar und leitet auf
+# Port 443 (Standardport, keine Extrawurst in den zurueckgegebenen URLs) an
+# den bestehenden paperless-proxy (Caddy) weiter, der die echte TLS-Terminierung
+# fuer diese Domain haelt — kein Aendern der bestehenden paperless-App noetig.
 
 services:
   paperlessmcp:
@@ -14,9 +23,11 @@ services:
     # wandernden `latest` liefe sonst ewig der zuerst gezogene Stand weiter.
     pull_policy: always
     restart: unless-stopped
+    depends_on:
+      paperless-alias:
+        condition: service_started
     environment:
-      # Internes Docker-DNS der paperless-App, kein TLS-Umweg noetig.
-      PAPERLESS_BASE_URL: http://paperless:8000
+      PAPERLESS_BASE_URL: https://paperless.mchristoffers.dev
       PAPERLESS_API_TOKEN: ${PAPERLESS_API_TOKEN:?PAPERLESS_API_TOKEN is required}
     expose:
       - "5000"
@@ -24,6 +35,27 @@ services:
       - paperless_internal
     volumes:
       - paperlessmcp_outbox:/home/mcp/outbox
+
+  # Reiner TCP-Durchreicher: macht paperless.mchristoffers.dev innerhalb des
+  # Docker-Netzes auf dem Standardport 443 auflösbar/erreichbar, ohne die
+  # bestehende paperless-App anzufassen. TLS terminiert weiterhin bei
+  # paperless-proxy (Caddy) mit dessen echtem Let's-Encrypt-Zertifikat — hier
+  # werden nur verschlüsselte Bytes durchgereicht, nichts wird entschlüsselt.
+  paperless-alias:
+    image: alpine/socat:latest
+    restart: unless-stopped
+    command: ["TCP-LISTEN:443,fork,reuseaddr", "TCP:paperless-proxy:8443"]
+    networks:
+      paperless_internal:
+        aliases:
+          - paperless.mchristoffers.dev
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      # Port 443 ist privilegiert; ohne dieses eine Capability scheitert der bind.
+      - NET_BIND_SERVICE
 
   paperlessmcp-proxy:
     build:

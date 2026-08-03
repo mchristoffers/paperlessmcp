@@ -23,21 +23,19 @@ Tailnets ist die TailVIP nicht routbar.
 - `paperlessmcp` — `ghcr.io/barryw/paperlessmcp`, veroeffentlicht keinen
   Host-Port. Haengt direkt im internen Docker-Netz der bestehenden
   `paperless`-App (`nft6hzc8en3d17anjht3vm1f_app_internal`, extern
-  referenziert) und spricht Paperless ueber `http://paperless:8000` an — kein
-  Umweg ueber Caddy/Tailscale fuer reinen API-Traffic.
+  referenziert) und spricht Paperless ueber `https://paperless.mchristoffers.dev`
+  an — denselben Hostnamen, den auch ein Browser/Tailnet-Client sieht.
+- `paperless-alias` — reiner `socat`-TCP-Durchreicher, registriert den Alias
+  `paperless.mchristoffers.dev` im geteilten Docker-Netz und leitet Port 443
+  an den bestehenden `paperless-proxy` (Caddy, Port 8443) weiter. TLS
+  terminiert unveraendert dort mit dessen echtem Zertifikat; hier werden nur
+  verschluesselte Bytes durchgereicht. Macht Download-/Vorschau-/
+  Thumbnail-URLs, die PaperlessMCP zurueckgibt (`client.BaseUrl` in
+  `DocumentTools.cs`), direkt im Browser/Tailnet anklickbar, ohne die
+  bestehende `paperless`-App anzufassen.
 - `paperlessmcp-proxy` — eigener minimaler Caddy-Build mit
   Cloudflare-DNS-Modul, bindet nur `127.0.0.1:8444`, das ausschliesslich
   tailscaled als Backend verwendet.
-
-**Bekannte Einschraenkung:** `PAPERLESS_BASE_URL` zeigt bewusst auf die
-interne Docker-Adresse `http://paperless:8000`, nicht auf
-`https://paperless.mchristoffers.dev`. Alle API-Aufrufe (Suche, Tags,
-Upload, …) funktionieren damit einwandfrei. Download-/Vorschau-/Thumbnail-URLs,
-die manche Tools zurueckgeben, werden aber aus dieser Basis-URL gebaut und sind
-deshalb selbst nur aus dem `paperless`-Docker-Netz erreichbar, nicht direkt aus
-dem Browser/Tailnet anklickbar. Falls das stoert: mit Moritz absprechen, ob
-stattdessen die externe URL verwendet werden soll (kostet mehr bewegliche
-Teile, siehe Commit-Historie/OKF-Notiz).
 
 Der Paperless-API-Token liegt nur als Coolify-Environment-Variable
 (`PAPERLESS_API_TOKEN`) vor, generiert fuer den bestehenden `moritz`-Nutzer via
