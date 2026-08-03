@@ -1,0 +1,64 @@
+name: paperlessmcp
+
+# PaperlessMCP auf der Homeserver-Coolify. Interner Dienst — kein Cloudflare
+# Tunnel oder Funnel. `svc:paperlessmcp` leitet TCP/443 ausschließlich im
+# Tailnet auf Caddy weiter; Caddy terminiert die eigene Domain mit Let's
+# Encrypt. PaperlessMCP selbst haengt direkt im internen Docker-Netz der
+# bestehenden paperless-App und spricht Paperless ueber deren Servicenamen an
+# (kein Umweg ueber Caddy/Tailscale fuer den API-Traffic).
+
+services:
+  paperlessmcp:
+    image: ghcr.io/barryw/paperlessmcp:${PAPERLESSMCP_VERSION:-latest}
+    # Ohne pull_policy zieht `up -d` nur, wenn das Image lokal fehlt — auf einem
+    # wandernden `latest` liefe sonst ewig der zuerst gezogene Stand weiter.
+    pull_policy: always
+    restart: unless-stopped
+    environment:
+      # Internes Docker-DNS der paperless-App, kein TLS-Umweg noetig.
+      PAPERLESS_BASE_URL: http://paperless:8000
+      PAPERLESS_API_TOKEN: ${PAPERLESS_API_TOKEN:?PAPERLESS_API_TOKEN is required}
+    expose:
+      - "5000"
+    networks:
+      - paperless_internal
+    volumes:
+      - paperlessmcp_outbox:/home/mcp/outbox
+
+  paperlessmcp-proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile.caddy
+      # Der Sonntags-Deploy aktualisiert damit auch Caddy und das DNS-Modul.
+      pull: true
+    restart: unless-stopped
+    depends_on:
+      paperlessmcp:
+        condition: service_started
+    environment:
+      CF_API_TOKEN: ${PAPERLESSMCP_CF_DNS_API_TOKEN:?PAPERLESSMCP_CF_DNS_API_TOKEN is required}
+    ports:
+      # Nur tailscaled erreicht diesen Port. Kein LAN- oder öffentlicher Bind.
+      - "127.0.0.1:8444:8443"
+    networks:
+      - paperless_internal
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  caddy_data:
+  caddy_config:
+  paperlessmcp_outbox:
+
+networks:
+  # Das interne Netz der bestehenden paperless-Coolify-App (nicht dieser App).
+  # So spricht PaperlessMCP Paperless direkt ueber dessen Servicenamen an,
+  # ohne Caddy/Tailscale/oeffentliches DNS fuer reinen API-Traffic zu bemuehen.
+  paperless_internal:
+    external: true
+    name: nft6hzc8en3d17anjht3vm1f_app_internal

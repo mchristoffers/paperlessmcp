@@ -1,0 +1,192 @@
+name: Deploy production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  # Woechentliches Auto-Update, 15 Minuten nach dem paperless-Update versetzt
+  # (das laeuft 0 4 * * 0), da paperlessmcp dessen Docker-Netz braucht. Das
+  # Compose zieht `latest` mit `pull_policy: always`, ein Redeploy holt also
+  # die neueste Version — Major inklusive. Der Lauf wartet auf das Ergebnis,
+  # ein rot gewordener Sonntag ist das Signal, dass etwas gestolpert ist.
+  schedule:
+    - cron: "15 4 * * 0"
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate production compose file
+        run: |
+          docker compose --env-file .env.example \
+            -f docker-compose.production.yml config >/dev/null
+
+      # Coolifys manueller GitHub-Webhook liest ref, repository.full_name und
+      # iteriert ueber commits[]. Ein workflow_dispatch- oder schedule-Payload
+      # hat keine commits und laesst Coolify mit 500 antworten, also bekommen
+      # solche Laeufe ein minimales push-foermiges Payload. Echte Pushes werden
+      # Byte fuer Byte weitergereicht.
+      - name: Build webhook payload
+        env:
+          HEAD_SHA: ${{ github.sha }}
+          REPO_FULL_NAME: ${{ github.repository }}
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            cp "$GITHUB_EVENT_PATH" payload.json
+          else
+            python3 - <<'PY'
+          import json, os
+
+          sha = os.environ["HEAD_SHA"]
+          payload = {
+              "ref": os.environ["REF"],
+              "before": "0" * 40,
+              "after": sha,
+              "repository": {"full_name": os.environ["REPO_FULL_NAME"]},
+              "commits": [{
+                  "id": sha,
+                  "message": f"Redeploy of {sha[:7]} ({os.environ.get('GITHUB_EVENT_NAME', '?')})",
+                  "added": [], "removed": [], "modified": [],
+              }],
+          }
+          with open("payload.json", "w") as fh:
+              json.dump(payload, fh)
+          PY
+          fi
+
+      - name: Trigger Coolify production deploy
+        id: trigger
+        env:
+          WEBHOOK_SECRET: ${{ secrets.COOLIFY_GITHUB_SECRET_PRODUCTION }}
+        run: |
+          signature="$(python3 - <<'PY'
+          import hashlib, hmac, os
+          from pathlib import Path
+
+          secret = os.environ["WEBHOOK_SECRET"].encode()
+          payload = Path("payload.json").read_bytes()
+          print("sha256=" + hmac.new(secret, payload, hashlib.sha256).hexdigest())
+          PY
+          )"
+          response="$(mktemp)"
+          curl --fail-with-body --request POST "${{ secrets.COOLIFY_GITHUB_WEBHOOK }}" \
+            --header "Content-Type: application/json" \
+            --header "X-GitHub-Event: push" \
+            --header "X-GitHub-Delivery: ${{ github.run_id }}-${{ github.run_attempt }}" \
+            --header "X-Hub-Signature-256: $signature" \
+            --header "CF-Access-Client-Id: ${{ secrets.CF_ACCESS_CLIENT_ID }}" \
+            --header "CF-Access-Client-Secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}" \
+            --data-binary "@payload.json" \
+            --output "$response" || { cat "$response"; exit 1; }
+          cat "$response"
+          ! grep -q '"status":"failed"' "$response"
+
+          uuid="$(python3 -c "
+          import json, sys
+          data = json.load(open('$response'))
+          items = data if isinstance(data, list) else [data]
+          for item in items:
+              if item.get('deployment_uuid'):
+                  print(item['deployment_uuid']); break
+          ")"
+          if [ -z "$uuid" ]; then
+            echo "Coolify hat keine deployment_uuid geliefert — Deploy nicht eingereiht."
+            exit 1
+          fi
+          echo "deployment_uuid=$uuid" >> "$GITHUB_OUTPUT"
+          echo "Deployment eingereiht: $uuid"
+
+      # Ohne diesen Schritt endet die Action gruen, sobald der Deploy nur
+      # EINGEREIHT ist — ein fehlgeschlagener Build faellt dann nicht auf.
+      #
+      # Abgefragt wird mit curl, NICHT mit Pythons urllib: Cloudflare blockt
+      # dessen User-Agent mit "error code: 1010" (HTTP 403), was zu einer
+      # endlos pollenden Schleife fuehren wuerde.
+      - name: Wait for Coolify deployment to finish
+        env:
+          DEPLOYMENT_UUID: ${{ steps.trigger.outputs.deployment_uuid }}
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+          WEBHOOK_URL: ${{ secrets.COOLIFY_GITHUB_WEBHOOK }}
+          CF_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          # Basis-URL aus der Webhook-URL ableiten, damit kein zweites Secret
+          # noetig ist, das auseinanderlaufen koennte.
+          base="${WEBHOOK_URL%%/webhooks/*}"
+          resp="$(mktemp)"
+          interval=15
+          max_polls=100          # 100 * 15s = 25 Minuten
+          max_errors=5           # danach abbrechen statt weiterzupollen
+          errors=0
+          last=""
+
+          for i in $(seq 1 "$max_polls"); do
+            code="$(curl -s -o "$resp" -m 30 -w '%{http_code}' \
+              --header "Authorization: Bearer $COOLIFY_TOKEN" \
+              --header "CF-Access-Client-Id: $CF_ID" \
+              --header "CF-Access-Client-Secret: $CF_SECRET" \
+              "$base/api/v1/deployments/$DEPLOYMENT_UUID" || echo 000)"
+
+            if [ "$code" != "200" ]; then
+              errors=$((errors + 1))
+              echo "::warning::Statusabfrage fehlgeschlagen (HTTP $code, $errors/$max_errors)"
+              head -c 200 "$resp"; echo
+              if [ "$errors" -ge "$max_errors" ]; then
+                echo "::error::Coolify-Status wiederholt nicht abrufbar (zuletzt HTTP $code)."
+                exit 1
+              fi
+              sleep "$interval"; continue
+            fi
+            errors=0
+
+            status="$(python3 -c "import json;print(json.load(open('$resp')).get('status','unknown'))")"
+            if [ "$status" != "$last" ]; then
+              echo "[$(date -u +%H:%M:%S)] Status: $status"
+              last="$status"
+            fi
+
+            # Alles, was nicht ausdruecklich als "laeuft noch" bekannt ist, gilt
+            # als Fehlschlag. Coolify meldet z.B. 'cancelled-by-user' — eine
+            # Positivliste von Fehlerstatus wuerde das verpassen und bis zum
+            # Timeout weiterpollen.
+            case "$status" in
+              finished)
+                echo "Deployment erfolgreich abgeschlossen."
+                exit 0
+                ;;
+              queued|in_progress|unknown)
+                ;;
+              *)
+                echo "::error::Coolify-Deployment endete mit '$status'."
+                python3 - "$resp" <<'PY'
+          import json, sys
+          data = json.load(open(sys.argv[1]))
+          logs = data.get("logs")
+          if logs:
+              try:
+                  entries = json.loads(logs)
+                  tail = [e.get("output", "") for e in entries][-40:]
+                  print("--- letzte Log-Zeilen ---")
+                  print("\n".join(l for l in tail if l))
+              except (ValueError, TypeError):
+                  print(str(logs)[-3000:])
+          PY
+                exit 1
+                ;;
+            esac
+            sleep "$interval"
+          done
+
+          echo "::error::Timeout nach $((max_polls * interval / 60)) Minuten (letzter Status: $last)."
+          exit 1
+
+      # Kein Health-Check auf der Live-URL: PaperlessMCP ist ein interner
+      # Dienst ohne Tunnel-Ingress, ein GitHub-Runner kommt weder ins LAN noch
+      # ins Tailnet. Der Coolify-Deployment-Status ist hier die letzte Instanz.
