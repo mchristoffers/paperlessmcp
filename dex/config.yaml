@@ -14,7 +14,7 @@ staticClients:
     secretEnv: DEX_CLIENT_SECRET
     redirectURIs:
       - https://claude.ai/api/mcp/auth_callback
-      - https://chatgpt.com/connector/oauth/NaeyNdNYffRn
+      - https://chatgpt.com/connector/oauth/NaeyNdNYffGn
     name: "Claude PaperlessMCP"
 
 enablePasswordDB: true
