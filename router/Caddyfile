@@ -4,9 +4,10 @@
 }
 
 :8080 {
-	@wellknown path /.well-known/oauth-protected-resource
-	header @wellknown Content-Type application/json
-	respond @wellknown `{"resource":"https://paperlessmcp-oauth.mchristoffers.dev/mcp","authorization_servers":["https://paperlessmcp-oauth.mchristoffers.dev/dex"]}` 200
+	handle /.well-known/oauth-protected-resource {
+		header Content-Type application/json
+		respond `{"resource":"https://paperlessmcp-oauth.mchristoffers.dev/mcp","authorization_servers":["https://paperlessmcp-oauth.mchristoffers.dev/dex"]}` 200
+	}
 
 	handle_path /dex/* {
 		reverse_proxy dex:5556
