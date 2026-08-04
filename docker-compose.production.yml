@@ -1,10 +1,11 @@
 name: paperlessmcp
 
-# PaperlessMCP auf der Homeserver-Coolify. Interner Dienst — kein Cloudflare
-# Tunnel oder Funnel. `svc:paperlessmcp` leitet TCP/443 ausschließlich im
-# Tailnet auf Caddy weiter; Caddy terminiert die eigene Domain mit Let's
-# Encrypt. PaperlessMCP selbst haengt direkt im internen Docker-Netz der
-# bestehenden paperless-App.
+# PaperlessMCP auf der Homeserver-Coolify. Oeffentlich erreichbar (fuer den
+# claude.ai Web-Connector) ueber den Homelab-Cloudflare-Tunnel, gesichert
+# durch Dex + oauth2-proxy (siehe unten). Kein Tailscale-Pfad mehr — der
+# fruehere `svc:paperlessmcp`/Caddy-Sidecar-Weg ist entfernt, seit alles nur
+# noch ueber den oeffentlichen OAuth-Pfad laeuft. PaperlessMCP selbst haengt
+# direkt im internen Docker-Netz der bestehenden paperless-App.
 #
 # PAPERLESS_BASE_URL zeigt bewusst auf den echten externen Hostnamen
 # (https://paperless.mchristoffers.dev), nicht auf http://paperless:8000: alle
@@ -56,31 +57,6 @@ services:
     cap_add:
       # Port 443 ist privilegiert; ohne dieses eine Capability scheitert der bind.
       - NET_BIND_SERVICE
-
-  paperlessmcp-proxy:
-    build:
-      context: .
-      dockerfile: Dockerfile.caddy
-      # Der Sonntags-Deploy aktualisiert damit auch Caddy und das DNS-Modul.
-      pull: true
-    restart: unless-stopped
-    depends_on:
-      paperlessmcp:
-        condition: service_started
-    environment:
-      CF_API_TOKEN: ${PAPERLESSMCP_CF_DNS_API_TOKEN:?PAPERLESSMCP_CF_DNS_API_TOKEN is required}
-    ports:
-      # Nur tailscaled erreicht diesen Port. Kein LAN- oder öffentlicher Bind.
-      - "127.0.0.1:8444:8443"
-    networks:
-      - paperless_internal
-    volumes:
-      - caddy_data:/data
-      - caddy_config:/config
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
 
   # Oeffentlicher Zugriff fuer claude.ai (Web-Connector kann nicht ins
   # Tailnet). Kein Cloudflare Access, kein Google-Login: Dex ist ein
@@ -162,8 +138,6 @@ services:
       - ALL
 
 volumes:
-  caddy_data:
-  caddy_config:
   paperlessmcp_outbox:
 
 networks:

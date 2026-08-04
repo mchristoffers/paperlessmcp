@@ -1,20 +1,22 @@
 # paperlessmcp — Homeserver Coolify
 
 [PaperlessMCP](https://github.com/barryw/PaperlessMCP) auf der **Homeserver**-Coolify.
-Interner Dienst: kein Cloudflare Tunnel, kein Cloudflare Access, keine
-oeffentliche Erreichbarkeit. Der Server hat kein eigenes Login — er reicht nur
-den Paperless-API-Token weiter — deshalb ausschliesslich intern.
+Oeffentlich erreichbar ueber den geteilten Homelab-Cloudflare-Tunnel, fuer den
+claude.ai Web-Connector (der kann nicht ins Tailnet). PaperlessMCP hat kein
+eigenes Login — deshalb sitzt Dex + oauth2-proxy davor, siehe unten. Kein
+Tailscale-Pfad mehr.
 
 ## Zugriff
 
-**`https://paperlessmcp.mchristoffers.dev/mcp`**
+**`https://paperlessmcp-oauth.mchristoffers.dev/mcp`**
 
-Der eigene Name zeigt auf die TailVIP von `svc:paperlessmcp` und ist deshalb
-ausschliesslich im Tailnet erreichbar. Tailscale leitet TCP/443 an einen
-kleinen Caddy-Sidecar weiter; Caddy holt und erneuert das Let's-Encrypt-
-Zertifikat per Cloudflare-DNS-Challenge und proxyt danach intern zu
-PaperlessMCP. Kein Cloudflare Tunnel, kein Access, kein Funnel. Außerhalb des
-Tailnets ist die TailVIP nicht routbar.
+OAuth 2.1 + PKCE, Login via Dex (`moritz`, lokales Passwort). Details:
+Dex issued Tokens, oauth2-proxy prueft sie (`skip-jwt-bearer-tokens`-Modus,
+API-Client schickt eigenen Bearer-Token statt Cookie-Flow) und reicht dann
+zum unveraenderten PaperlessMCP durch. Ein `paperlessmcp-oauth-router`
+(Caddy, plain HTTP hinter dem Tunnel — der terminiert TLS) routet `/dex/*`
+zu Dex, `/mcp*` zum Gate, und liefert die MCP-Protected-Resource-Metadata
+unter `/.well-known/oauth-protected-resource`.
 
 ## Stack
 
@@ -33,9 +35,11 @@ Tailnets ist die TailVIP nicht routbar.
   Thumbnail-URLs, die PaperlessMCP zurueckgibt (`client.BaseUrl` in
   `DocumentTools.cs`), direkt im Browser/Tailnet anklickbar, ohne die
   bestehende `paperless`-App anzufassen.
-- `paperlessmcp-proxy` — eigener minimaler Caddy-Build mit
-  Cloudflare-DNS-Modul, bindet nur `127.0.0.1:8444`, das ausschliesslich
-  tailscaled als Backend verwendet.
+- `dex` — statisch konfigurierter OIDC-Server (ein Client `claude-mcp`, ein
+  lokaler Nutzer `moritz`), memory storage.
+- `oauth2-proxy` — validiert Bearer-JWTs gegen Dex' JWKS, reicht durch.
+- `paperlessmcp-oauth-router` — Caddy, plain HTTP, Port 8084 (kein LAN-
+  Zugriff noetig, nur der Tunnel-Container erreicht ihn).
 
 Der Paperless-API-Token liegt nur als Coolify-Environment-Variable
 (`PAPERLESS_API_TOKEN`) vor, generiert fuer den bestehenden `moritz`-Nutzer via
@@ -58,5 +62,4 @@ erzeugbar.
 
 Push auf `main` → GitHub Action validiert das Compose, signiert das Payload
 und POSTet es an Coolifys manuellen GitHub-Webhook, dann wartet sie auf das
-Ergebnis. Kein Health-Check auf der URL — ein GitHub-Runner kommt nicht ins
-Tailnet.
+Ergebnis. Kein Health-Check auf der URL (Endpoint verlangt jetzt OAuth).
