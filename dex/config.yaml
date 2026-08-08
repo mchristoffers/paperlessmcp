@@ -22,6 +22,6 @@ staticClients:
 enablePasswordDB: true
 staticPasswords:
   - email: "moritz"
-    hash: "$2b$12$***REMOVED-SECRET***"
+    hash: "$2b$12$xnnkthoV77BPEvpqkYkbs.ZcP0d/lj0NG9bOSI4QQy2uxQRIEhcba"
     username: "moritz"
     userID: "moritz"
