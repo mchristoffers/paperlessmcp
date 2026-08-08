@@ -21,10 +21,9 @@ staticClients:
 
 enablePasswordDB: true
 staticPasswords:
-  # NOT A REAL HASH — intentionally invalid placeholder. Login will fail
-  # until Moritz generates a real bcrypt hash and sets it here (or better,
-  # templates it in from an env var at deploy time, like DEX_CLIENT_SECRET).
+  # TEMPORARY random password, valid bcrypt so Dex actually boots. Not the
+  # final real password — Moritz should rotate this to his own choice.
   - email: "moritz"
-    hash: "REPLACE_WITH_REAL_BCRYPT_HASH_BEFORE_DEPLOY"
+    hash: "$2b$12$LSEEMryyXDp4D9w2Vp.gxulfNApna4cCzluHirpgBC.QebkwuwT7y"
     username: "moritz"
     userID: "moritz"
