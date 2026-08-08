@@ -6,6 +6,19 @@ claude.ai Web-Connector (der kann nicht ins Tailnet). PaperlessMCP hat kein
 eigenes Login — deshalb sitzt Dex + oauth2-proxy davor, siehe unten. Kein
 Tailscale-Pfad mehr.
 
+## Claude Code Plugin
+
+Dieses Repo ist gleichzeitig ein Claude-Code-Plugin (`.claude-plugin/plugin.json`
++ `.mcp.json`) und ein Agent-Plugins-1.0.0-Paket (root `plugin.json` +
+`mcp.json`), listet den `paperless-ngx` MCP-Server via
+`https://paperlessmcp-oauth.mchristoffers.dev/mcp` (OAuth) und wird ueber die
+[mchristoffers/claude-marketplace](https://github.com/mchristoffers/claude-marketplace)
+Marketplace installiert. Fuer den lokalen Claude-Code-OAuth-Callback
+(`http://localhost:51823/callback`) muss diese Redirect-URI zusaetzlich in
+`dex/config.yaml` (`staticClients[0].redirectURIs`) eingetragen sein, plus
+`PAPERLESSMCP_DEX_CLIENT_SECRET` lokal exportiert werden (gleicher Wert wie
+`DEX_CLIENT_SECRET` in Coolify).
+
 ## Zugriff
 
 **`https://paperlessmcp-oauth.mchristoffers.dev/mcp`**

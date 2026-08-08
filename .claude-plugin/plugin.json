@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "paperlessmcp",
+  "displayName": "PaperlessMCP",
+  "version": "1.0.0",
+  "description": "Connects Claude Code to the hosted PaperlessMCP server for searching, tagging, and managing Paperless-ngx documents.",
+  "author": {
+    "name": "Moritz Christoffers"
+  },
+  "repository": "https://github.com/mchristoffers/paperlessmcp",
+  "keywords": ["paperless", "paperless-ngx", "mcp", "documents"]
+}

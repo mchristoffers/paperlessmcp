@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "paperless-ngx": {
+      "type": "http",
+      "url": "https://paperlessmcp-oauth.mchristoffers.dev/mcp",
+      "oauth": {
+        "clientId": "claude-mcp",
+        "clientSecret": "${PAPERLESSMCP_DEX_CLIENT_SECRET}",
+        "callbackPort": 51823
+      }
+    }
+  }
+}
