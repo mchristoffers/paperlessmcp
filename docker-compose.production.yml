@@ -61,8 +61,10 @@ services:
   # Oeffentlicher Zugriff fuer claude.ai (Web-Connector kann nicht ins
   # Tailnet). Kein Cloudflare Access, kein Google-Login: Dex ist ein
   # premade, 11k*-OIDC-Server mit rein statischer Konfiguration — genau ein
-  # Client (claude-mcp), genau ein lokaler Nutzer (moritz). Speicher: memory
-  # (kein Datenbestand, nur kurzlebige Auth-Codes/Sessions).
+  # Client (claude-mcp), genau ein lokaler Nutzer (moritz). Speicher: sqlite3
+  # auf einem eigenen Volume, damit Sessions/Refresh-Tokens/Signing-Keys einen
+  # Container-Neustart (Redeploy, Host-Reboot, OOM) ueberleben — mit
+  # storage:memory (vorher) hat jeder Neustart alle Logins invalidiert.
   dex:
     build:
       context: ./dex
@@ -74,6 +76,8 @@ services:
       - "5556"
     networks:
       - paperless_internal
+    volumes:
+      - dex_data:/var/dex
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -139,6 +143,7 @@ services:
 
 volumes:
   paperlessmcp_outbox:
+  dex_data:
 
 networks:
   # Das interne Netz der bestehenden paperless-Coolify-App (nicht dieser App).

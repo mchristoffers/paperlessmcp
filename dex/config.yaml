@@ -1,7 +1,9 @@
 issuer: https://paperlessmcp-oauth.mchristoffers.dev/dex
 
 storage:
-  type: memory
+  type: sqlite3
+  config:
+    file: /var/dex/dex.db
 
 web:
   http: 0.0.0.0:5556
