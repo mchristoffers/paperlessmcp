@@ -115,7 +115,6 @@ services:
 
 volumes:
   paperlessmcp_outbox:
-  dex_data:
 
 networks:
   # Das interne Netz der bestehenden paperless-Coolify-App (nicht dieser App).
