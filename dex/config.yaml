@@ -1,0 +1,29 @@
+issuer: https://paperlessmcp-oauth.mchristoffers.dev/dex
+
+storage:
+  type: sqlite3
+  config:
+    file: /var/dex/dex.db
+
+web:
+  http: 0.0.0.0:5556
+
+oauth2:
+  skipApprovalScreen: true
+
+staticClients:
+  - id: claude-mcp
+    secretEnv: DEX_CLIENT_SECRET
+    redirectURIs:
+      - https://claude.ai/api/mcp/auth_callback
+      - https://chatgpt.com/connector/oauth/NaeyNdNYffGn
+    name: "Claude PaperlessMCP"
+
+enablePasswordDB: true
+staticPasswords:
+  # TEMPORARY random password, valid bcrypt so Dex actually boots. Not the
+  # final real password — Moritz should rotate this to his own choice.
+  - email: "moritz"
+    hash: "$2b$12$LSEEMryyXDp4D9w2Vp.gxulfNApna4cCzluHirpgBC.QebkwuwT7y"
+    username: "moritz"
+    userID: "moritz"

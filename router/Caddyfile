@@ -1,0 +1,44 @@
+{
+	auto_https off
+	admin off
+}
+
+:8080 {
+	handle /.well-known/oauth-protected-resource {
+		header Content-Type application/json
+		respond `{"resource":"https://paperlessmcp-oauth.mchristoffers.dev/mcp","authorization_servers":["https://paperlessmcp-oauth.mchristoffers.dev/dex"]}` 200
+	}
+
+	# Static override so MCP clients see a registration_endpoint and attempt
+	# DCR instead of falling back to "ask the user for a Client ID". Dex has
+	# no DCR support, so /register (below) always hands back the one real
+	# static client instead of creating a new one — same client every time,
+	# not real dynamic registration. Everything else here is copied verbatim
+	# from Dex's real discovery doc; keep it in sync if Dex's own document
+	# ever changes (new Dex version, new scopes, etc).
+	handle /dex/.well-known/openid-configuration {
+		header Content-Type application/json
+		respond `{"issuer":"https://paperlessmcp-oauth.mchristoffers.dev/dex","authorization_endpoint":"https://paperlessmcp-oauth.mchristoffers.dev/dex/auth","token_endpoint":"https://paperlessmcp-oauth.mchristoffers.dev/dex/token","jwks_uri":"https://paperlessmcp-oauth.mchristoffers.dev/dex/keys","userinfo_endpoint":"https://paperlessmcp-oauth.mchristoffers.dev/dex/userinfo","device_authorization_endpoint":"https://paperlessmcp-oauth.mchristoffers.dev/dex/device/code","introspection_endpoint":"https://paperlessmcp-oauth.mchristoffers.dev/dex/token/introspect","registration_endpoint":"https://paperlessmcp-oauth.mchristoffers.dev/register","grant_types_supported":["authorization_code","refresh_token","urn:ietf:params:oauth:grant-type:device_code","urn:ietf:params:oauth:grant-type:token-exchange"],"response_types_supported":["code"],"subject_types_supported":["public"],"id_token_signing_alg_values_supported":["RS256"],"code_challenge_methods_supported":["S256","plain"],"scopes_supported":["openid","email","groups","profile","offline_access"],"token_endpoint_auth_methods_supported":["client_secret_basic","client_secret_post"],"claims_supported":["iss","sub","aud","iat","exp","email","email_verified","locale","name","preferred_username","at_hash","groups","federated_claims"]}` 200
+	}
+
+	# Fake DCR (RFC 7591): always returns the one real static Dex client
+	# (claude-mcp) instead of minting a new one per call. Lets MCP clients
+	# that require DCR (e.g. claude.ai web) connect without a manual
+	# "enter Client ID/Secret" step, without Dex needing real DCR support.
+	handle /register {
+		header Content-Type application/json
+		respond `{"client_id":"claude-mcp","client_secret":"{$DEX_CLIENT_SECRET}","client_id_issued_at":0,"redirect_uris":["https://claude.ai/api/mcp/auth_callback","https://chatgpt.com/connector/oauth/NaeyNdNYffGn"],"grant_types":["authorization_code","refresh_token"],"response_types":["code"],"token_endpoint_auth_method":"client_secret_post"}` 201
+	}
+
+	handle /dex/* {
+		reverse_proxy dex:5556
+	}
+
+	handle /mcp* {
+		reverse_proxy oauth2-proxy:4180
+	}
+
+	handle {
+		respond 404
+	}
+}
