@@ -2,10 +2,17 @@ name: paperlessmcp
 
 # PaperlessMCP auf der Homeserver-Coolify. Oeffentlich erreichbar (fuer den
 # claude.ai Web-Connector) ueber den Homelab-Cloudflare-Tunnel, gesichert
-# durch Dex + oauth2-proxy (siehe unten). Kein Tailscale-Pfad mehr — der
-# fruehere `svc:paperlessmcp`/Caddy-Sidecar-Weg ist entfernt, seit alles nur
-# noch ueber den oeffentlichen OAuth-Pfad laeuft. PaperlessMCP selbst haengt
-# direkt im internen Docker-Netz der bestehenden paperless-App.
+# durch das oauth-agents-Gateway (nginx + winziger Auth-Dienst, siehe unten).
+# PaperlessMCP selbst haengt direkt im internen Docker-Netz der bestehenden
+# paperless-App.
+#
+# Vorher lag hier Dex + oauth2-proxy + ein Caddy-Router. Das sind jetzt zwei
+# Container statt drei: Dex kann kein Dynamic Client Registration, weshalb
+# claude.ai beim Verbinden immer nach einer Client-ID gefragt hat. Der
+# Auth-Dienst beantwortet /register mit genau einem statischen Client, egal
+# wie oft und von wem er aufgerufen wird — kein zweiter Client entsteht je.
+# Quelle: github.com/mchristoffers/oauth-agents (hier einkopiert, damit der
+# Coolify-Deploy nicht von einem zweiten privaten Repo abhaengt).
 #
 # PAPERLESS_BASE_URL zeigt bewusst auf den echten externen Hostnamen
 # (https://paperless.mchristoffers.dev), nicht auf http://paperless:8000: alle
@@ -58,96 +65,60 @@ services:
       # Port 443 ist privilegiert; ohne dieses eine Capability scheitert der bind.
       - NET_BIND_SERVICE
 
-  # Oeffentlicher Zugriff fuer claude.ai (Web-Connector kann nicht ins
-  # Tailnet). Kein Cloudflare Access, kein Google-Login: Dex ist ein
-  # premade, 11k*-OIDC-Server mit rein statischer Konfiguration — genau ein
-  # Client (claude-mcp), genau ein lokaler Nutzer (moritz). Speicher: sqlite3
-  # auf einem eigenen Volume, damit Sessions/Refresh-Tokens/Signing-Keys einen
-  # Container-Neustart (Redeploy, Host-Reboot, OOM) ueberleben — mit
-  # storage:memory (vorher) hat jeder Neustart alle Logins invalidiert.
-  dex:
+  # OAuth 2.1 (Authorization Code + PKCE) in ~300 Zeilen Python, ohne
+  # Abhaengigkeiten und ohne Datenbank. Tokens sind zustandslose JWTs, mit
+  # JWT_SECRET signiert — ein Redeploy wirft deshalb keine Logins weg (Dex mit
+  # storage:memory hat genau das getan). Access-Token 1h, Refresh 30 Tage.
+  auth:
     build:
-      context: ./dex
+      context: ./auth
       pull: true
     restart: unless-stopped
     environment:
-      DEX_CLIENT_SECRET: ${DEX_CLIENT_SECRET:?DEX_CLIENT_SECRET is required}
+      ISSUER: ${ISSUER:?ISSUER is required}
+      OAUTH_CLIENT_SECRET: ${OAUTH_CLIENT_SECRET:?OAUTH_CLIENT_SECRET is required}
+      GATEWAY_USERNAME: ${GATEWAY_USERNAME:?GATEWAY_USERNAME is required}
+      GATEWAY_PASSWORD: ${GATEWAY_PASSWORD:?GATEWAY_PASSWORD is required}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+    volumes:
+      - ./services.json:/app/services.json:ro
     expose:
-      - "5556"
+      - "8000"
     networks:
       - paperless_internal
-    volumes:
-      - dex_data:/var/dex
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
 
-  # Premade Bearer-Token-Gate (14.8k*) vor dem unveraenderten paperlessmcp:
-  # prueft den von claude.ai gesendeten JWT gegen Dex' JWKS
-  # (skip-jwt-bearer-tokens-Modus, kein Cookie/Redirect-Flow noetig) und
-  # reicht dann durch.
-  oauth2-proxy:
-    image: quay.io/oauth2-proxy/oauth2-proxy:latest
+  # Plain-HTTP-Gateway hinter dem Homelab-Cloudflare-Tunnel (der Tunnel
+  # terminiert TLS). Routet den Login-Flow zum Auth-Dienst und gated /mcp per
+  # auth_request: ohne gueltiges Bearer-Token kommt 401 samt
+  # WWW-Authenticate zurueck, sonst geht es an das unveraenderte PaperlessMCP.
+  # Config wird aus services.json generiert (scripts/gen-nginx-conf.py) und ist
+  # bewusst mit eingecheckt, damit der Deploy keinen Generator-Lauf braucht.
+  gateway:
+    image: nginx:alpine
     restart: unless-stopped
     depends_on:
+      auth:
+        condition: service_started
       paperlessmcp:
         condition: service_started
-      dex:
-        condition: service_started
     environment:
-      OAUTH2_PROXY_PROVIDER: oidc
-      OAUTH2_PROXY_OIDC_ISSUER_URL: https://paperlessmcp-oauth.mchristoffers.dev/dex
-      OAUTH2_PROXY_CLIENT_ID: claude-mcp
-      OAUTH2_PROXY_CLIENT_SECRET: ${DEX_CLIENT_SECRET:?DEX_CLIENT_SECRET is required}
-      OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_PROXY_COOKIE_SECRET:?OAUTH2_PROXY_COOKIE_SECRET is required}
-      OAUTH2_PROXY_REDIRECT_URL: https://paperlessmcp-oauth.mchristoffers.dev/oauth2/callback
-      OAUTH2_PROXY_UPSTREAMS: http://paperlessmcp:5000
-      OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
-      OAUTH2_PROXY_SKIP_JWT_BEARER_TOKENS: "true"
-      OAUTH2_PROXY_EXTRA_JWT_ISSUERS: https://paperlessmcp-oauth.mchristoffers.dev/dex=claude-mcp
-      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
-      OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
-      OAUTH2_PROXY_INSECURE_OIDC_ALLOW_UNVERIFIED_EMAIL: "true"
-    expose:
-      - "4180"
-    networks:
-      - paperless_internal
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-
-  # Plain-HTTP-Router hinter dem Homelab-Cloudflare-Tunnel (Tunnel terminiert
-  # TLS, siehe coolify-home/nextcloud/appflowy/mealie). Routet /dex/* zu Dex,
-  # /mcp* zum Bearer-Gate, und serviert die MCP-Protected-Resource-Metadata
-  # als statisches JSON (keine eigene Logik, nur Caddy-Config).
-  paperlessmcp-oauth-router:
-    build:
-      context: ./router
-      pull: true
-    restart: unless-stopped
-    depends_on:
-      dex:
-        condition: service_started
-      oauth2-proxy:
-        condition: service_started
-    environment:
-      # Needed so /register (fake DCR, see Caddyfile) can hand back the same
-      # secret Dex itself uses for the claude-mcp static client.
-      DEX_CLIENT_SECRET: ${DEX_CLIENT_SECRET:?DEX_CLIENT_SECRET is required}
+      ISSUER: ${ISSUER:?ISSUER is required}
+      # Nur diese Namen ersetzt envsubst in der nginx-Config; nginx-eigene
+      # $variables ($host, $request_uri, …) bleiben dadurch unangetastet.
+      NGINX_ENVSUBST_FILTER: "^(TOKEN_|ISSUER$)"
+    volumes:
+      - ./gateway/templates:/etc/nginx/templates:ro
     ports:
       - "8084:8080"
     networks:
       - paperless_internal
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
 
 volumes:
   paperlessmcp_outbox:
-  dex_data:
 
 networks:
   # Das interne Netz der bestehenden paperless-Coolify-App (nicht dieser App).
