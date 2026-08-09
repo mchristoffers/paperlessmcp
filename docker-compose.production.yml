@@ -69,26 +69,25 @@ services:
   # Die Coolify-Variablen heissen GATEWAY_*/OAUTH_*, das Image erwartet
   # USERNAME/PASSWORD/CLIENT_SECRET — deshalb hier umgehaengt.
   oauth:
-    # Direkt aus dem oeffentlichen oauth-agents-Repo gebaut. Kein Vendoring,
-    # keine Registry-Zugangsdaten: nichts davon liegt in diesem Repo, nur die
-    # Environment-Werte unten. (GHCR waere die Alternative, dessen Package ist
-    # aber privat und die Sichtbarkeit laesst sich nur per Weboberflaeche
-    # umstellen — der Git-Build braucht dafuer gar keinen Login.)
-    build: https://github.com/mchristoffers/oauth-agents.git#main
+    # Login vor dem sonst ungeschuetzten PaperlessMCP. Ein Image, vier
+    # Variablen, sonst nichts — Quelle: github.com/mchristoffers/oauth-agents
+    # Client-ID/Secret fuer /register erzeugt der Dienst selbst; sie muessen
+    # nicht konfiguriert werden, weil /register sie ohnehin jedem herausgibt.
+    # Das Token-Signing leitet sich vom Passwort ab, bleibt also ueber
+    # Redeploys stabil.
+    image: ghcr.io/mchristoffers/oauth-agents:latest
+    pull_policy: always
     restart: unless-stopped
     depends_on:
       paperlessmcp:
         condition: service_started
     environment:
       ISSUER: ${ISSUER:?ISSUER is required}
-      RESOURCE: ${ISSUER:?ISSUER is required}/mcp
       UPSTREAM: http://paperlessmcp:5000
       USERNAME: ${GATEWAY_USERNAME:?GATEWAY_USERNAME is required}
       PASSWORD: ${GATEWAY_PASSWORD:?GATEWAY_PASSWORD is required}
-      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
-      CLIENT_SECRET: ${OAUTH_CLIENT_SECRET:?OAUTH_CLIENT_SECRET is required}
-      CLIENT_ID: claude-mcp
-      REDIRECT_URIS: https://claude.ai/api/mcp/auth_callback,https://chatgpt.com/connector/oauth/NaeyNdNYffGn
+      # PaperlessMCP haengt unter /mcp, nicht an der Wurzel.
+      RESOURCE: ${ISSUER:?ISSUER is required}/mcp
     ports:
       - "8084:8080"
     networks:
