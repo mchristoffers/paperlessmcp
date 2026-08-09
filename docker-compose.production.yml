@@ -63,51 +63,32 @@ services:
       # Port 443 ist privilegiert; ohne dieses eine Capability scheitert der bind.
       - NET_BIND_SERVICE
 
-  # OAuth 2.1 (Authorization Code + PKCE) in ~300 Zeilen Python, ohne
-  # Abhaengigkeiten und ohne Datenbank. Tokens sind zustandslose JWTs, mit
-  # JWT_SECRET signiert — ein Redeploy wirft deshalb keine Logins weg (Dex mit
-  # storage:memory hat genau das getan). Access-Token 1h, Refresh 30 Tage.
-  # Die Coolify-Variablen heissen GATEWAY_*/OAUTH_*, der Dienst erwartet
+  # Login vor dem sonst ungeschuetzten PaperlessMCP. Ein Container, ein Image,
+  # Konfiguration komplett ueber Environment — nichts davon liegt in diesem
+  # Repo. Quelle: github.com/mchristoffers/oauth-agents
+  # Die Coolify-Variablen heissen GATEWAY_*/OAUTH_*, das Image erwartet
   # USERNAME/PASSWORD/CLIENT_SECRET — deshalb hier umgehaengt.
-  auth:
-    build:
-      context: ./auth
-      pull: true
+  oauth:
+    # Direkt aus dem oeffentlichen oauth-agents-Repo gebaut. Kein Vendoring,
+    # keine Registry-Zugangsdaten: nichts davon liegt in diesem Repo, nur die
+    # Environment-Werte unten. (GHCR waere die Alternative, dessen Package ist
+    # aber privat und die Sichtbarkeit laesst sich nur per Weboberflaeche
+    # umstellen — der Git-Build braucht dafuer gar keinen Login.)
+    build: https://github.com/mchristoffers/oauth-agents.git#main
     restart: unless-stopped
+    depends_on:
+      paperlessmcp:
+        condition: service_started
     environment:
       ISSUER: ${ISSUER:?ISSUER is required}
       RESOURCE: ${ISSUER:?ISSUER is required}/mcp
+      UPSTREAM: http://paperlessmcp:5000
       USERNAME: ${GATEWAY_USERNAME:?GATEWAY_USERNAME is required}
       PASSWORD: ${GATEWAY_PASSWORD:?GATEWAY_PASSWORD is required}
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
       CLIENT_SECRET: ${OAUTH_CLIENT_SECRET:?OAUTH_CLIENT_SECRET is required}
       CLIENT_ID: claude-mcp
       REDIRECT_URIS: https://claude.ai/api/mcp/auth_callback,https://chatgpt.com/connector/oauth/NaeyNdNYffGn
-    expose:
-      - "8000"
-    networks:
-      - paperless_internal
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-
-  # Plain-HTTP-Proxy hinter dem Homelab-Cloudflare-Tunnel (der terminiert TLS).
-  # Login-Endpunkte gehen an auth, alles andere braucht ein gueltiges Token
-  # (auth_request) und geht dann an das unveraenderte PaperlessMCP.
-  proxy:
-    build:
-      context: ./proxy
-      pull: true
-    restart: unless-stopped
-    depends_on:
-      auth:
-        condition: service_started
-      paperlessmcp:
-        condition: service_started
-    environment:
-      UPSTREAM: http://paperlessmcp:5000
-      NGINX_ENVSUBST_FILTER: "^UPSTREAM$$"
     ports:
       - "8084:8080"
     networks:
