@@ -3,8 +3,8 @@
 [PaperlessMCP](https://github.com/barryw/PaperlessMCP) auf der **Homeserver**-Coolify.
 Oeffentlich erreichbar ueber den geteilten Homelab-Cloudflare-Tunnel, fuer den
 claude.ai Web-Connector (der kann nicht ins Tailnet). PaperlessMCP hat kein
-eigenes Login — deshalb sitzt Dex + oauth2-proxy davor, siehe unten. Kein
-Tailscale-Pfad mehr.
+eigenes Login — deshalb sitzt [oauth-agents](https://github.com/mchristoffers/oauth-agents)
+davor, siehe unten. Kein Tailscale-Pfad mehr.
 
 ## Claude Code Plugin
 
@@ -13,23 +13,21 @@ Dieses Repo ist gleichzeitig ein Claude-Code-Plugin (`.claude-plugin/plugin.json
 `mcp.json`), listet den `paperless-ngx` MCP-Server via
 `https://paperlessmcp-oauth.mchristoffers.dev/mcp` (OAuth) und wird ueber die
 [mchristoffers/claude-marketplace](https://github.com/mchristoffers/claude-marketplace)
-Marketplace installiert. Fuer den lokalen Claude-Code-OAuth-Callback
-(`http://localhost:51823/callback`) muss diese Redirect-URI zusaetzlich in
-`dex/config.yaml` (`staticClients[0].redirectURIs`) eingetragen sein, plus
-`PAPERLESSMCP_DEX_CLIENT_SECRET` lokal exportiert werden (gleicher Wert wie
-`DEX_CLIENT_SECRET` in Coolify).
+Marketplace installiert. Nichts einzutragen: `oauth-agents` beantwortet
+`POST /register` (Dynamic Client Registration) immer mit demselben statischen
+Client, und Loopback-Callbacks auf beliebigem Port sind pauschal erlaubt
+(RFC 8252) — Claude Code holt sich Client-ID und Secret also selbst.
 
 ## Zugriff
 
 **`https://paperlessmcp-oauth.mchristoffers.dev/mcp`**
 
-OAuth 2.1 + PKCE, Login via Dex (`moritz`, lokales Passwort). Details:
-Dex issued Tokens, oauth2-proxy prueft sie (`skip-jwt-bearer-tokens`-Modus,
-API-Client schickt eigenen Bearer-Token statt Cookie-Flow) und reicht dann
-zum unveraenderten PaperlessMCP durch. Ein `paperlessmcp-oauth-router`
-(Caddy, plain HTTP hinter dem Tunnel — der terminiert TLS) routet `/dex/*`
-zu Dex, `/mcp*` zum Gate, und liefert die MCP-Protected-Resource-Metadata
-unter `/.well-known/oauth-protected-resource`.
+OAuth 2.1 + PKCE, ein Login (`GATEWAY_USERNAME`/`GATEWAY_PASSWORD`). Der
+`oauth`-Container ist Authorization Server und Gate in einem: er stellt die
+Tokens aus, prueft den Bearer am `/mcp`-Pfad und reicht zum unveraenderten
+PaperlessMCP durch. Er liefert auch die MCP-Protected-Resource-Metadata unter
+`/.well-known/oauth-protected-resource`. Hinter dem Tunnel plain HTTP — TLS
+terminiert Cloudflare.
 
 ## Stack
 
@@ -39,20 +37,15 @@ unter `/.well-known/oauth-protected-resource`.
   Host-Port. Haengt direkt im internen Docker-Netz der bestehenden
   `paperless`-App (`nft6hzc8en3d17anjht3vm1f_app_internal`, extern
   referenziert) und spricht Paperless ueber `https://paperless.mchristoffers.dev`
-  an — denselben Hostnamen, den auch ein Browser/Tailnet-Client sieht.
-- `paperless-alias` — reiner `socat`-TCP-Durchreicher, registriert den Alias
-  `paperless.mchristoffers.dev` im geteilten Docker-Netz und leitet Port 443
-  an den bestehenden `paperless-proxy` (Caddy, Port 8443) weiter. TLS
-  terminiert unveraendert dort mit dessen echtem Zertifikat; hier werden nur
-  verschluesselte Bytes durchgereicht. Macht Download-/Vorschau-/
-  Thumbnail-URLs, die PaperlessMCP zurueckgibt (`client.BaseUrl` in
-  `DocumentTools.cs`), direkt im Browser/Tailnet anklickbar, ohne die
-  bestehende `paperless`-App anzufassen.
-- `dex` — statisch konfigurierter OIDC-Server (ein Client `claude-mcp`, ein
-  lokaler Nutzer `moritz`), memory storage.
-- `oauth2-proxy` — validiert Bearer-JWTs gegen Dex' JWKS, reicht durch.
-- `paperlessmcp-oauth-router` — Caddy, plain HTTP, Port 8084 (kein LAN-
-  Zugriff noetig, nur der Tunnel-Container erreicht ihn).
+  an — denselben Hostnamen, den auch ein Browser/Tailnet-Client sieht. Das
+  braucht keine Hilfskonstruktion im Docker-Netz: oeffentliches DNS liefert die
+  Tailscale-VIP, der Host routet Container-Traffic ueber `tailscale0` dorthin,
+  und dort haengt `paperless-proxy` mit gueltigem Zertifikat auf 443. Damit
+  sind die Download-/Vorschau-/Thumbnail-URLs, die PaperlessMCP baut
+  (`client.BaseUrl` in `DocumentTools.cs`), direkt anklickbar.
+- `oauth` — `ghcr.io/mchristoffers/oauth-agents`, Port 8084 (kein LAN-Zugriff
+  noetig, nur der Tunnel-Container erreicht ihn). Volume `oauth_data:/data`
+  haelt den Signing-Key, sonst logged jeder Redeploy alle Clients aus.
 
 Der Paperless-API-Token liegt nur als Coolify-Environment-Variable
 (`PAPERLESS_API_TOKEN`) vor, generiert fuer den bestehenden `moritz`-Nutzer via

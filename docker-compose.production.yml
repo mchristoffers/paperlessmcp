@@ -17,10 +17,11 @@ name: paperlessmcp
 # Download-/Vorschau-/Thumbnail-URLs, die PaperlessMCP zurueckgibt, werden
 # clientseitig aus genau dieser Base-URL gebaut (siehe DocumentTools.cs,
 # client.BaseUrl) und muessen deshalb direkt im Browser/Tailnet anklickbar
-# sein. `paperless-alias` macht den Hostnamen intern aufloesbar und leitet auf
-# Port 443 (Standardport, keine Extrawurst in den zurueckgegebenen URLs) an
-# den bestehenden paperless-proxy (Caddy) weiter, der die echte TLS-Terminierung
-# fuer diese Domain haelt — kein Aendern der bestehenden paperless-App noetig.
+# sein. Der Container erreicht diesen Hostnamen ohne Hilfskonstruktion:
+# oeffentliches DNS liefert die Tailscale-VIP (100.102.6.240), und der Host
+# routet Container-Traffic dorthin ueber tailscale0. Hier stand frueher ein
+# socat-Sidecar `paperless-alias`, das nur 8443 auf 443 umbog — ueberfluessig,
+# weil die VIP selbst schon auf 443 mit gueltigem Zertifikat antwortet.
 
 services:
   paperlessmcp:
@@ -29,9 +30,6 @@ services:
     # wandernden `latest` liefe sonst ewig der zuerst gezogene Stand weiter.
     pull_policy: always
     restart: unless-stopped
-    depends_on:
-      paperless-alias:
-        condition: service_started
     environment:
       PAPERLESS_BASE_URL: https://paperless.mchristoffers.dev
       PAPERLESS_API_TOKEN: ${PAPERLESS_API_TOKEN:?PAPERLESS_API_TOKEN is required}
@@ -41,27 +39,6 @@ services:
       - paperless_internal
     volumes:
       - paperlessmcp_outbox:/home/mcp/outbox
-
-  # Reiner TCP-Durchreicher: macht paperless.mchristoffers.dev innerhalb des
-  # Docker-Netzes auf dem Standardport 443 auflösbar/erreichbar, ohne die
-  # bestehende paperless-App anzufassen. TLS terminiert weiterhin bei
-  # paperless-proxy (Caddy) mit dessen echtem Let's-Encrypt-Zertifikat — hier
-  # werden nur verschlüsselte Bytes durchgereicht, nichts wird entschlüsselt.
-  paperless-alias:
-    image: alpine/socat:latest
-    restart: unless-stopped
-    command: ["TCP-LISTEN:443,fork,reuseaddr", "TCP:paperless-proxy:8443"]
-    networks:
-      paperless_internal:
-        aliases:
-          - paperless.mchristoffers.dev
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    cap_add:
-      # Port 443 ist privilegiert; ohne dieses eine Capability scheitert der bind.
-      - NET_BIND_SERVICE
 
   # Login vor dem sonst ungeschuetzten PaperlessMCP. Ein Container, ein Image,
   # Konfiguration komplett ueber Environment — nichts davon liegt in diesem
