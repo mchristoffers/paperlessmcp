@@ -73,8 +73,8 @@ services:
     # Variablen, sonst nichts — Quelle: github.com/mchristoffers/oauth-agents
     # Client-ID/Secret fuer /register erzeugt der Dienst selbst; sie muessen
     # nicht konfiguriert werden, weil /register sie ohnehin jedem herausgibt.
-    # Das Token-Signing leitet sich vom Passwort ab, bleibt also ueber
-    # Redeploys stabil.
+    # Der Signing-Key entsteht beim ersten Start und liegt im Volume — ohne
+    # das waere nach jedem Redeploy jeder Login weg (das alte Dex-Problem).
     image: ghcr.io/mchristoffers/oauth-agents:latest
     pull_policy: always
     restart: unless-stopped
@@ -90,11 +90,14 @@ services:
       RESOURCE: ${ISSUER:?ISSUER is required}/mcp
     ports:
       - "8084:8080"
+    volumes:
+      - oauth_data:/data
     networks:
       - paperless_internal
 
 volumes:
   paperlessmcp_outbox:
+  oauth_data:
 
 networks:
   # Das interne Netz der bestehenden paperless-Coolify-App (nicht dieser App).
